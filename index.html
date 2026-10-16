@@ -1,0 +1,271 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Battle - Othello</title>
+<style>
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  text-align: center;
+  background: #f1f5f9;
+  color: #172033;
+}
+main {
+  max-width: 560px;
+  margin: 24px auto;
+  padding: 16px;
+}
+h1 { margin-bottom: 6px; }
+#status { min-height: 28px; font-weight: bold; }
+#board {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 3px;
+  padding: 5px;
+  background: #14532d;
+  border-radius: 8px;
+  width: min(90vw, 480px);
+  aspect-ratio: 1;
+  margin: 18px auto;
+  box-sizing: border-box;
+}
+.cell {
+  background: #22a05a;
+  border: 0;
+  border-radius: 3px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+}
+.disc {
+  width: 78%;
+  height: 78%;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px #0004;
+}
+.black { background: #111827; }
+.white { background: #fff; }
+button.control {
+  border: 0;
+  border-radius: 9px;
+  background: #2563eb;
+  color: white;
+  padding: 12px 18px;
+  margin: 5px;
+  font-size: 16px;
+  cursor: pointer;
+}
+button.control:disabled { opacity: .55; }
+#score { font-size: 18px; font-weight: bold; }
+#log {
+  background: white;
+  border-radius: 8px;
+  padding: 12px;
+  text-align: left;
+  max-height: 130px;
+  overflow: auto;
+  font-size: 13px;
+}
+.note { color: #475569; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>♟ AI Battle</h1>
+  <p>オセロ自動対戦</p>
+  <p id="status">対局準備中...</p>
+  <div id="score">黒 2 - 2 白</div>
+  <div id="board"></div>
+  <button class="control" id="start">自動対戦スタート</button>
+  <button class="control" id="reset">最初から</button>
+  <p class="note">
+    黒：戦略A ／ 白：戦略B<br>
+    無料テスト版・音声なし・操作不要で進行
+  </p>
+  <h3>対局記録</h3>
+  <div id="log">対局開始を待っています。</div>
+</main>
+<script>
+const N = 8;
+const boardEl = document.getElementById("board");
+const statusEl = document.getElementById("status");
+const scoreEl = document.getElementById("score");
+const logEl = document.getElementById("log");
+const startBtn = document.getElementById("start");
+
+let board, running = false, timer = null, moves = 0;
+const directions = [
+  [-1,-1],[-1,0],[-1,1],[0,-1],
+  [0,1],[1,-1],[1,0],[1,1]
+];
+
+function freshBoard() {
+  const b = Array.from({length:N}, () => Array(N).fill(0));
+  b[3][3] = 2; b[3][4] = 1;
+  b[4][3] = 1; b[4][4] = 2;
+  return b;
+}
+
+function inside(r,c) {
+  return r >= 0 && r < N && c >= 0 && c < N;
+}
+
+function flipsFor(b,r,c,player) {
+  if (!inside(r,c) || b[r][c] !== 0) return [];
+  const all = [];
+  for (const [dr,dc] of directions) {
+    let rr = r + dr, cc = c + dc;
+    const line = [];
+    while (inside(rr,cc) && b[rr][cc] === 3-player) {
+      line.push([rr,cc]);
+      rr += dr; cc += dc;
+    }
+    if (line.length && inside(rr,cc) && b[rr][cc] === player) {
+      all.push(...line);
+    }
+  }
+  return all;
+}
+
+function legalMoves(b,player) {
+  const result = [];
+  for (let r=0;r<N;r++) for (let c=0;c<N;c++) {
+    const flips = flipsFor(b,r,c,player);
+    if (flips.length) result.push({r,c,flips});
+  }
+  return result;
+}
+
+function applyMove(b,move,player) {
+  b[move.r][move.c] = player;
+  for (const [r,c] of move.flips) b[r][c] = player;
+}
+
+function counts() {
+  let black=0, white=0;
+  for (const row of board) for (const v of row) {
+    if (v===1) black++;
+    if (v===2) white++;
+  }
+  return {black,white};
+}
+
+function render() {
+  boardEl.innerHTML = "";
+  for (let r=0;r<N;r++) for (let c=0;c<N;c++) {
+    const cell = document.createElement("div");
+    cell.className = "cell";
+    cell.setAttribute("aria-label", `${r+1}行${c+1}列`);
+    if (board[r][c]) {
+      const disc = document.createElement("div");
+      disc.className = "disc " +
+        (board[r][c]===1 ? "black" : "white");
+      cell.appendChild(disc);
+    }
+    boardEl.appendChild(cell);
+  }
+  const s = counts();
+  scoreEl.textContent = `黒 ${s.black} - ${s.white} 白`;
+}
+
+function evaluateMove(move,player,strategy) {
+  const corners = [[0,0],[0,7],[7,0],[7,7]];
+  const {r,c} = move;
+  let score = move.flips.length * (strategy===1 ? 1 : 0.4);
+  if (corners.some(([x,y]) => x===r && y===c)) score += 100;
+  if ((r===0 || r===7) && (c===0 || c===7)) score += 30;
+  if (r===0 || r===7 || c===0 || c===7) score += 5;
+  if (strategy===2) score += Math.random()*8;
+  return score;
+}
+
+function chooseMove(moves,player,strategy) {
+  const ranked = moves.map(m => ({
+    move:m,
+    score:evaluateMove(m,player,strategy)
+  }));
+  ranked.sort((a,b) => b.score-a.score);
+  // 同点付近の候補から選び、戦略に個性を持たせる
+  if (strategy===2 && ranked.length>1 &&
+      Math.random()<0.35) {
+    return ranked[Math.min(1,ranked.length-1)].move;
+  }
+  return ranked[0].move;
+}
+
+function addLog(text) {
+  const line = document.createElement("div");
+  line.textContent = text;
+  logEl.prepend(line);
+}
+
+function finish() {
+  running = false;
+  clearTimeout(timer);
+  startBtn.disabled = false;
+  const s = counts();
+  let result = "引き分け！";
+  if (s.black>s.white) result = "黒（戦略A）の勝利！";
+  if (s.white>s.black) result = "白（戦略B）の勝利！";
+  statusEl.textContent = `対局終了：${result}`;
+  addLog(`🏁 ${result} 黒 ${s.black} - 白 ${s.white}`);
+}
+
+function step(player) {
+  if (!running) return;
+  let movesAvailable = legalMoves(board,player);
+
+  if (!movesAvailable.length) {
+    const other = 3-player;
+    if (!legalMoves(board,other).length) {
+      render();
+      finish();
+      return;
+    }
+    addLog(`${player===1?"黒":"白"}はパス`);
+    statusEl.textContent =
+      `${player===1?"黒":"白"}は置ける場所がないためパス`;
+    timer = setTimeout(() => step(other),650);
+    return;
+  }
+
+  const strategy = player===1 ? 1 : 2;
+  const move = chooseMove(movesAvailable,player,strategy);
+  applyMove(board,move,player);
+  moves++;
+  render();
+  statusEl.textContent =
+    `${player===1?"黒（戦略A）":"白（戦略B）"}：${move.r+1}行${move.c+1}列`;
+  addLog(`${moves}手目：${player===1?"黒":"白"} → ${move.r+1}行${move.c+1}列`);
+  timer = setTimeout(() => step(3-player),550);
+}
+
+function reset() {
+  running = false;
+  clearTimeout(timer);
+  board = freshBoard();
+  moves = 0;
+  render();
+  statusEl.textContent = "対局準備完了";
+  logEl.textContent = "対局開始を待っています。";
+  startBtn.disabled = false;
+}
+
+startBtn.addEventListener("click", () => {
+  if (running) return;
+  running = true;
+  startBtn.disabled = true;
+  addLog("対局開始！");
+  step(1);
+});
+
+document.getElementById("reset").addEventListener("click", reset);
+reset();
+</script>
+</body>
+</html>
